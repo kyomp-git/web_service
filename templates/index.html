@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>画像ダウンロードツール</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f8f9fa; }
+    .step-card { border-left: 4px solid #dee2e6; margin-bottom: 1.5rem; }
+    .step-card.active { border-left-color: #0d6efd; }
+    .step-card.done { border-left-color: #198754; }
+    .step-num {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px; border-radius: 50%;
+      background: #dee2e6; color: #6c757d; font-weight: 700; font-size: 0.85rem;
+      margin-right: 8px; flex-shrink: 0;
+    }
+    .step-card.active .step-num { background: #0d6efd; color: #fff; }
+    .step-card.done .step-num { background: #198754; color: #fff; }
+    .col-badge { font-size: 0.75rem; padding: 2px 6px; }
+    #url-list { max-height: 220px; overflow-y: auto; font-size: 0.8rem; }
+    #event-log { max-height: 300px; overflow-y: auto; font-size: 0.8rem; }
+    .status-icon { display: inline-block; width: 16px; text-align: center; }
+    .log-row { border-bottom: 1px solid #f0f0f0; padding: 3px 0; }
+    .log-row:last-child { border-bottom: none; }
+    .cell-preview {
+      max-width: 300px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; font-size: 0.75rem; color: #6c757d;
+    }
+    #progress-bar-wrap { height: 22px; }
+  </style>
+</head>
+<body>
+<div class="container py-4" style="max-width: 860px;">
+  <h4 class="mb-1 fw-bold">画像ダウンロードツール</h4>
+  <p class="text-muted mb-4" style="font-size:0.9rem;">CSVのHTMLカラムから img タグを抽出して一括ダウンロード</p>
+
+  <!-- Step 1: CSV貼り付け -->
+  <div class="card step-card active" id="card-step1">
+    <div class="card-body">
+      <h6 class="d-flex align-items-center mb-3"><span class="step-num">1</span>CSVを読み込む</h6>
+
+      <!-- ファイルインポート -->
+      <div class="mb-3">
+        <label class="form-label fw-semibold" style="font-size:0.9rem;">ファイルを選択</label>
+        <div class="d-flex align-items-center gap-2">
+          <input type="file" id="csv-file" accept=".csv,text/csv" class="form-control form-control-sm" style="max-width:340px;">
+          <span id="file-status" class="text-muted" style="font-size:0.85rem;"></span>
+        </div>
+      </div>
+
+      <!-- 区切り線 -->
+      <div class="d-flex align-items-center gap-2 mb-3">
+        <hr class="flex-grow-1 m-0">
+        <span class="text-muted" style="font-size:0.8rem;">または直接貼り付け</span>
+        <hr class="flex-grow-1 m-0">
+      </div>
+
+      <!-- テキスト貼り付け -->
+      <textarea id="csv-input" class="form-control font-monospace mb-3"
+        rows="5" placeholder="CSVをここに貼り付けてください（ヘッダー行含む）"></textarea>
+
+      <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-primary btn-sm" id="btn-parse">解析する</button>
+        <span id="parse-status" class="text-muted" style="font-size:0.85rem;"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: カラム選択 -->
+  <div class="card step-card" id="card-step2" style="display:none!important">
+    <div class="card-body">
+      <h6 class="d-flex align-items-center mb-3"><span class="step-num">2</span>imgタグを含むカラムを選択（複数可）</h6>
+      <p class="text-muted mb-2" style="font-size:0.82rem;">クリックで選択／解除。<span class="badge bg-warning text-dark">img検出</span> は自動で選択済みです。</p>
+      <div id="column-selector" class="mb-3"></div>
+      <div id="sample-table-wrap" class="mb-3" style="overflow-x:auto;"></div>
+      <button class="btn btn-primary btn-sm" id="btn-extract">URLを抽出</button>
+      <span id="extract-status" class="text-muted ms-2" style="font-size:0.85rem;"></span>
+    </div>
+  </div>
+
+  <!-- Step 3: URL確認 -->
+  <div class="card step-card" id="card-step3" style="display:none!important">
+    <div class="card-body">
+      <h6 class="d-flex align-items-center mb-3"><span class="step-num">3</span>抽出結果を確認</h6>
+      <div id="url-summary" class="mb-2"></div>
+      <div id="url-list" class="border rounded p-2 bg-white mb-3 font-monospace"></div>
+      <button class="btn btn-success" id="btn-start">ダウンロード開始</button>
+    </div>
+  </div>
+
+  <!-- Step 4: 進行状況 -->
+  <div class="card step-card" id="card-step4" style="display:none!important">
+    <div class="card-body">
+      <h6 class="d-flex align-items-center mb-3"><span class="step-num">4</span>ダウンロード進行状況</h6>
+
+      <div class="progress mb-3" id="progress-bar-wrap">
+        <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated"
+          role="progressbar" style="width:0%">0%</div>
+      </div>
+
+      <div class="row text-center mb-3" id="stats-row">
+        <div class="col-3">
+          <div class="fw-bold text-success fs-5" id="stat-success">0</div>
+          <div class="text-muted" style="font-size:0.8rem;">完了</div>
+        </div>
+        <div class="col-3">
+          <div class="fw-bold text-danger fs-5" id="stat-failed">0</div>
+          <div class="text-muted" style="font-size:0.8rem;">失敗</div>
+        </div>
+        <div class="col-3">
+          <div class="fw-bold text-warning fs-5" id="stat-running">0</div>
+          <div class="text-muted" style="font-size:0.8rem;">実行中</div>
+        </div>
+        <div class="col-3">
+          <div class="fw-bold text-secondary fs-5" id="stat-pending">0</div>
+          <div class="text-muted" style="font-size:0.8rem;">待機中</div>
+        </div>
+      </div>
+
+      <div id="event-log" class="border rounded p-2 bg-white font-monospace mb-3"></div>
+
+      <div id="complete-section" style="display:none">
+        <div class="alert alert-success mb-2" id="complete-msg"></div>
+        <button class="btn btn-outline-danger btn-sm" id="btn-export-failed" style="display:none">
+          失敗リストをCSVエクスポート
+        </button>
+        <button class="btn btn-outline-secondary btn-sm ms-2" id="btn-restart">
+          最初からやり直す
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const CSRF_TOKEN  = document.querySelector('meta[name="csrf-token"]').content;
+  const SESSION_ID  = '{{ session_id }}';
+
+  // 全fetchに共通ヘッダーを付与するラッパー
+  function apiFetch(url, options = {}) {
+    return fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': CSRF_TOKEN,
+        ...(options.headers || {}),
+      },
+    });
+  }
+
+  let csvContent = '';
+  let parsedHeaders = [];
+  let selectedColumns = new Set();
+  let extractedUrls = [];
+
+  // Counters
+  let cntSuccess = 0, cntFailed = 0, cntRunning = 0, cntPending = 0, cntTotal = 0;
+
+  function showCard(id) {
+    document.getElementById(id).style.removeProperty('display');
+  }
+  function hideCard(id) {
+    document.getElementById(id).style.display = 'none';
+  }
+  function setActive(cardId) {
+    ['card-step1','card-step2','card-step3','card-step4'].forEach(id => {
+      const el = document.getElementById(id);
+      el.classList.remove('active','done');
+    });
+    document.getElementById(cardId).classList.add('active');
+  }
+  function markDone(cardId) {
+    document.getElementById(cardId).classList.remove('active');
+    document.getElementById(cardId).classList.add('done');
+  }
+
+  // ---- ファイル選択: エンコーディング自動判別して読み込む ----
+  document.getElementById('csv-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const statusEl = document.getElementById('file-status');
+    statusEl.textContent = '読み込み中...';
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+
+      // BOM でエンコーディングを判定
+      let encoding;
+      if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+        encoding = 'UTF-8';       // UTF-8 BOM付き
+      } else if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
+        encoding = 'UTF-16LE';    // UTF-16 LE BOM
+      } else if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
+        encoding = 'UTF-16BE';    // UTF-16 BE BOM
+      } else {
+        // BOMなし: UTF-8 として読んで文字化け（U+FFFD）があれば Shift-JIS を試みる
+        const utf8 = new TextDecoder('UTF-8', { fatal: false }).decode(buffer);
+        if (utf8.includes('�')) {
+          encoding = 'Shift_JIS';
+        } else {
+          encoding = 'UTF-8';
+        }
+      }
+
+      const text = new TextDecoder(encoding, { fatal: false }).decode(buffer);
+      // UTF-8 BOM が残っている場合は除去
+      const cleaned = text.startsWith('﻿') ? text.slice(1) : text;
+
+      document.getElementById('csv-input').value = cleaned;
+      statusEl.textContent = `✓ ${file.name}　(${(file.size / 1024).toFixed(1)} KB・${encoding})`;
+    } catch (err) {
+      document.getElementById('file-status').textContent = '読み込みに失敗しました: ' + err.message;
+    }
+  });
+
+  // ---- Step 1: Parse CSV ----
+  document.getElementById('btn-parse').addEventListener('click', async () => {
+    csvContent = document.getElementById('csv-input').value.trim();
+    if (!csvContent) { alert('CSVファイルを選択するか、テキストを貼り付けてください'); return; }
+
+    document.getElementById('parse-status').textContent = '解析中...';
+    try {
+      const res = await apiFetch('/parse_csv', {
+        method: 'POST',
+        body: JSON.stringify({content: csvContent})
+      });
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+
+      parsedHeaders = data.headers;
+      document.getElementById('parse-status').textContent =
+        `✓ ${data.total_rows.toLocaleString()} 行 / ${data.headers.length} カラム`;
+
+      renderColumnSelector(data.headers, data.html_columns, data.sample);
+      markDone('card-step1');
+      showCard('card-step2');
+      setActive('card-step2');
+    } catch (e) {
+      alert('エラー: ' + e.message);
+    }
+  });
+
+  function renderColumnSelector(headers, htmlCols, sample) {
+    const wrap = document.getElementById('column-selector');
+    wrap.innerHTML = '';
+    selectedColumns.clear();
+
+    const group = document.createElement('div');
+    group.className = 'd-flex flex-wrap gap-2';
+
+    headers.forEach((h, i) => {
+      const isHtml = htmlCols.includes(i);
+      const btn = document.createElement('button');
+      btn.id = `col-btn-${i}`;
+      btn.className = `btn btn-sm ${isHtml ? 'btn-primary' : 'btn-outline-secondary'}`;
+      btn.innerHTML = `<span class="col-badge">${i}</span> ${escapeHtml(h)}` +
+        (isHtml ? ' <span class="badge bg-warning text-dark" style="font-size:0.7rem">img検出</span>' : '');
+      btn.dataset.col = i;
+      if (isHtml) selectedColumns.add(i);
+
+      btn.addEventListener('click', () => {
+        if (selectedColumns.has(i)) {
+          selectedColumns.delete(i);
+          btn.classList.remove('btn-primary');
+          btn.classList.add('btn-outline-secondary');
+        } else {
+          selectedColumns.add(i);
+          btn.classList.remove('btn-outline-secondary');
+          btn.classList.add('btn-primary');
+        }
+        highlightSampleColumns();
+      });
+      group.appendChild(btn);
+    });
+    wrap.appendChild(group);
+
+    renderSampleTable(headers, sample);
+    setTimeout(() => highlightSampleColumns(), 50);
+  }
+
+  function renderSampleTable(headers, sample) {
+    const wrap = document.getElementById('sample-table-wrap');
+    let html = '<table class="table table-sm table-bordered" style="font-size:0.75rem">';
+    html += '<thead class="table-light"><tr>';
+    html += headers.map((h,i) => `<th id="th-col-${i}">${escapeHtml(h)}</th>`).join('');
+    html += '</tr></thead><tbody>';
+    sample.forEach(row => {
+      html += '<tr>';
+      html += row.map((cell, i) =>
+        `<td id="td-col-${i}" class="cell-preview" title="${escapeHtml(cell)}">${escapeHtml(cell.substring(0,80))}</td>`
+      ).join('');
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  }
+
+  function highlightSampleColumns() {
+    document.querySelectorAll('[id^="th-col-"], [id^="td-col-"]').forEach(el => {
+      el.style.background = '';
+    });
+    selectedColumns.forEach(i => {
+      document.querySelectorAll(`#th-col-${i}, #td-col-${i}`).forEach(el => {
+        el.style.background = '#fff3cd';
+      });
+    });
+  }
+
+  // ---- Step 2: Extract URLs ----
+  document.getElementById('btn-extract').addEventListener('click', async () => {
+    if (selectedColumns.size === 0) { alert('カラムを1つ以上選択してください'); return; }
+
+    document.getElementById('extract-status').textContent = '抽出中...';
+    try {
+      const res = await apiFetch('/extract_urls', {
+        method: 'POST',
+        body: JSON.stringify({content: csvContent, columns: Array.from(selectedColumns)})
+      });
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+
+      extractedUrls = data.urls;
+      let statusText = `✓ ${data.total} 件 (重複除外: ${data.duplicates} 件)`;
+      if (data.blocked_count > 0) {
+        statusText += ` / ⚠️ セキュリティブロック: ${data.blocked_count} 件`;
+      }
+      document.getElementById('extract-status').textContent = statusText;
+
+      renderUrlList(data.urls, data.blocked);
+      markDone('card-step2');
+      showCard('card-step3');
+      setActive('card-step3');
+    } catch (e) {
+      alert('エラー: ' + e.message);
+    }
+  });
+
+  function renderUrlList(urls, blocked) {
+    const summary = document.getElementById('url-summary');
+    let badges = `<span class="badge bg-primary me-2">${urls.length} 件 ダウンロード対象</span>`;
+    if (blocked && blocked.length > 0) {
+      badges += `<span class="badge bg-danger me-2" title="内部IPやlocalhostなど安全でないURLを除外しました">⚠️ ${blocked.length} 件ブロック済み</span>`;
+    }
+    summary.innerHTML = badges;
+
+    const list = document.getElementById('url-list');
+    if (urls.length === 0) {
+      list.innerHTML = '<span class="text-muted">ダウンロード対象のURLが見つかりませんでした</span>';
+      document.getElementById('btn-start').disabled = true;
+    } else {
+      list.innerHTML = urls.slice(0, 200).map((url, i) =>
+        `<div class="log-row"><span class="text-muted me-2">${i+1}.</span>${escapeHtml(url)}</div>`
+      ).join('') + (urls.length > 200 ? `<div class="text-muted mt-1">... 他 ${urls.length-200} 件</div>` : '');
+    }
+
+    if (blocked && blocked.length > 0) {
+      list.innerHTML += `<div class="mt-2 p-2 bg-danger bg-opacity-10 rounded" style="font-size:0.78rem;">
+        <strong class="text-danger">ブロックされたURL (${blocked.length} 件):</strong>
+        ${blocked.slice(0,10).map(b =>
+          `<div class="text-muted">${escapeHtml(b.url.substring(0,80))} — ${escapeHtml(b.reason)}</div>`
+        ).join('')}
+        ${blocked.length > 10 ? `<div class="text-muted">... 他 ${blocked.length-10} 件</div>` : ''}
+      </div>`;
+    }
+  }
+
+  // ---- Step 3: Start Download ----
+  document.getElementById('btn-start').addEventListener('click', async () => {
+    if (!extractedUrls.length) return;
+
+    try {
+      const res = await apiFetch('/start_download', {
+        method: 'POST',
+        body: JSON.stringify({urls: extractedUrls})
+      });
+      const data = await res.json();
+      if (data.error) { alert(data.error); return; }
+
+      cntTotal = extractedUrls.length;
+      cntSuccess = cntFailed = cntRunning = 0;
+      cntPending = cntTotal;
+
+      markDone('card-step3');
+      showCard('card-step4');
+      setActive('card-step4');
+      document.getElementById('event-log').innerHTML = '';
+      document.getElementById('complete-section').style.display = 'none';
+      updateStats();
+      listenEvents();
+    } catch (e) {
+      alert('エラー: ' + e.message);
+    }
+  });
+
+  // ---- Step 4: SSE progress ----
+  function listenEvents() {
+    const es = new EventSource(`/events?sid=${SESSION_ID}`);
+    es.onmessage = (e) => {
+      const event = JSON.parse(e.data);
+      handleEvent(event);
+      if (event.type === 'complete') {
+        es.close();
+        onComplete(event);
+      }
+    };
+    es.onerror = () => { es.close(); };
+  }
+
+  const statusOf = {};
+
+  function handleEvent(event) {
+    if (event.type === 'start') {
+      cntPending = event.total;
+      updateStats();
+      return;
+    }
+    if (event.type === 'update') {
+      const prev = statusOf[event.url];
+      const cur = event.status;
+
+      if (prev !== 'downloading' && cur === 'downloading') { cntRunning++; cntPending = Math.max(0, cntPending - 1); }
+      if (prev === 'downloading' && cur === 'retry') { cntRunning = Math.max(0, cntRunning - 1); }
+      if (cur === 'retry') { cntRunning++; cntPending = Math.max(0, cntPending - 1); }
+      if (cur === 'success') { cntSuccess++; cntRunning = Math.max(0, cntRunning - 1); }
+      if (cur === 'failed') { cntFailed++; cntRunning = Math.max(0, cntRunning - 1); }
+
+      statusOf[event.url] = cur;
+      addLogRow(event);
+      updateStats();
+    }
+  }
+
+  function addLogRow(event) {
+    const log = document.getElementById('event-log');
+    const row = document.createElement('div');
+    row.className = 'log-row';
+
+    const icons = { downloading: '⬇️', retry: '🔁', success: '✅', failed: '❌' };
+    const icon = icons[event.status] || '';
+    const shortUrl = event.url.length > 70 ? event.url.substring(0,70) + '…' : event.url;
+    let extra = '';
+    if (event.status === 'retry') extra = ` <span class="text-warning">[リトライ ${event.attempt}回目: ${event.error}]</span>`;
+    if (event.status === 'failed') extra = ` <span class="text-danger">[失敗: ${event.error}]</span>`;
+    if (event.status === 'success') extra = ` <span class="text-success">[${event.filename}]</span>`;
+
+    row.innerHTML = `<span class="status-icon">${icon}</span> ${escapeHtml(shortUrl)}${extra}`;
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function updateStats() {
+    const done = cntSuccess + cntFailed;
+    const pct = cntTotal > 0 ? Math.round((done / cntTotal) * 100) : 0;
+    const bar = document.getElementById('progress-bar');
+    bar.style.width = pct + '%';
+    bar.textContent = pct + '%';
+    document.getElementById('stat-success').textContent = cntSuccess;
+    document.getElementById('stat-failed').textContent = cntFailed;
+    document.getElementById('stat-running').textContent = cntRunning;
+    document.getElementById('stat-pending').textContent = cntPending;
+  }
+
+  function onComplete(event) {
+    const bar = document.getElementById('progress-bar');
+    bar.style.width = '100%';
+    bar.textContent = '100%';
+    bar.classList.remove('progress-bar-animated');
+    bar.classList.add(cntFailed > 0 ? 'bg-warning' : 'bg-success');
+
+    const msg = document.getElementById('complete-msg');
+    msg.textContent = `完了: ${event.success} 件成功 / ${event.failed} 件失敗 / 合計 ${event.total} 件`;
+
+    const exportBtn = document.getElementById('btn-export-failed');
+    if (event.failed > 0) exportBtn.style.removeProperty('display');
+
+    document.getElementById('complete-section').style.removeProperty('display');
+    markDone('card-step4');
+  }
+
+  document.getElementById('btn-export-failed').addEventListener('click', () => {
+    window.location.href = '/export_failed';
+  });
+
+  document.getElementById('btn-restart').addEventListener('click', () => {
+    location.reload();
+  });
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>

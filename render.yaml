@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: image-downloader
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT
+    plan: free
+    envVars:
+      - key: BASIC_AUTH_USER
+        sync: false          # Renderダッシュボードで設定
+      - key: BASIC_AUTH_PASS
+        sync: false          # Renderダッシュボードで設定
+      - key: SECRET_KEY
+        generateValue: true  # Renderが自動生成
+      - key: CSRF_SECRET
+        generateValue: true  # Renderが自動生成
+      - key: DOWNLOAD_DIR
+        value: /tmp/downloads
