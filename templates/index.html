@@ -138,7 +138,10 @@
 
       <div id="complete-section" style="display:none">
         <div class="alert alert-success mb-2" id="complete-msg"></div>
-        <button class="btn btn-outline-danger btn-sm" id="btn-export-failed" style="display:none">
+        <button class="btn btn-primary btn-sm" id="btn-download-zip" style="display:none">
+          ZIPでダウンロード
+        </button>
+        <button class="btn btn-outline-danger btn-sm ms-2" id="btn-export-failed" style="display:none">
           失敗リストをCSVエクスポート
         </button>
         <button class="btn btn-outline-secondary btn-sm ms-2" id="btn-restart">
@@ -519,12 +522,17 @@
     const msg = document.getElementById('complete-msg');
     msg.textContent = `完了: ${event.success} 件成功 / ${event.failed} 件失敗 / 合計 ${event.total} 件`;
 
+    if (event.success > 0) document.getElementById('btn-download-zip').style.removeProperty('display');
     const exportBtn = document.getElementById('btn-export-failed');
     if (event.failed > 0) exportBtn.style.removeProperty('display');
 
     document.getElementById('complete-section').style.removeProperty('display');
     markDone('card-step4');
   }
+
+  document.getElementById('btn-download-zip').addEventListener('click', () => {
+    window.location.href = '/download_zip';
+  });
 
   document.getElementById('btn-export-failed').addEventListener('click', () => {
     window.location.href = '/export_failed';

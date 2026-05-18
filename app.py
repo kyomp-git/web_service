@@ -9,6 +9,7 @@ import re
 import secrets
 import uuid
 import webbrowser
+import zipfile
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor
@@ -533,6 +534,36 @@ def events_stream():
                     headers={'Cache-Control': 'no-cache',
                              'X-Accel-Buffering': 'no',
                              'Connection': 'keep-alive'})
+
+
+@app.route('/download_zip')
+def download_zip():
+    sid = get_sid()
+    state = get_or_create_state(sid)
+
+    dl_dir = get_download_dir()
+    success_items = [
+        (url, item['filename'])
+        for url, item in state['items'].items()
+        if item['status'] == 'success' and item.get('filename')
+    ]
+
+    if not success_items:
+        return jsonify({'error': '完了したファイルがありません'}), 400
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for _url, filename in success_items:
+            filepath = dl_dir / filename
+            if filepath.exists():
+                zf.write(filepath, filename)
+    zip_buffer.seek(0)
+
+    return Response(
+        zip_buffer.getvalue(),
+        mimetype='application/zip',
+        headers={'Content-Disposition': 'attachment; filename=images.zip'},
+    )
 
 
 @app.route('/export_failed')
