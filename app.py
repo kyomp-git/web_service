@@ -28,9 +28,25 @@ app.secret_key        = os.environ.get('SECRET_KEY',    secrets.token_hex(32))
 CSRF_TOKEN_VALUE      = os.environ.get('CSRF_SECRET',   secrets.token_hex(32))
 BASIC_AUTH_USER       = os.environ.get('BASIC_AUTH_USER', 'admin')
 BASIC_AUTH_PASS       = os.environ.get('BASIC_AUTH_PASS', '')  # 空 = ローカル開発（認証スキップ）
-DOWNLOAD_DIR          = Path(os.environ.get('DOWNLOAD_DIR', 'downloads')).resolve()
+IS_LOCAL              = not bool(BASIC_AUTH_PASS)              # ローカル実行かどうか
 
-DOWNLOAD_DIR.mkdir(exist_ok=True)
+_default_download_dir = Path(os.environ.get('DOWNLOAD_DIR', 'downloads')).resolve()
+_default_download_dir.mkdir(exist_ok=True)
+
+# ランタイムで変更可能な保存先（ローカルモード専用）
+_download_dir       = _default_download_dir
+_download_dir_lock  = threading.Lock()
+
+
+def get_download_dir() -> Path:
+    with _download_dir_lock:
+        return _download_dir
+
+
+def set_download_dir(new_path: Path) -> None:
+    global _download_dir
+    with _download_dir_lock:
+        _download_dir = new_path
 
 TIMEOUT              = 10
 MAX_RETRIES          = 3
@@ -206,8 +222,9 @@ def get_safe_filename(url: str, index: int) -> str:
         filename = f'{index:04d}_{name}{ext}'
     except Exception:
         filename = f'{index:04d}_image.jpg'
-    candidate = (DOWNLOAD_DIR / filename).resolve()
-    if not str(candidate).startswith(str(DOWNLOAD_DIR)):
+    dl_dir = get_download_dir()
+    candidate = (dl_dir / filename).resolve()
+    if not str(candidate).startswith(str(dl_dir)):
         filename = f'{index:04d}_image.jpg'
     return filename
 
@@ -223,7 +240,7 @@ def add_event(sid: str, event_data: dict):
 
 
 def download_one(sid: str, url: str, filename: str, index: int):
-    filepath = DOWNLOAD_DIR / filename
+    filepath = get_download_dir() / filename
     last_error = ''
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -337,7 +354,43 @@ def add_security_headers(response):
 @app.route('/')
 def index():
     sid = get_sid()
-    return render_template('index.html', csrf_token=CSRF_TOKEN_VALUE, session_id=sid)
+    return render_template('index.html',
+                           csrf_token=CSRF_TOKEN_VALUE,
+                           session_id=sid,
+                           is_local=IS_LOCAL,
+                           download_dir=str(get_download_dir()))
+
+
+@app.route('/download_dir', methods=['GET'])
+def get_download_dir_route():
+    return jsonify({'path': str(get_download_dir())})
+
+
+@app.route('/download_dir', methods=['POST'])
+def set_download_dir_route():
+    if not IS_LOCAL:
+        abort(403, description='保存先の変更はローカル実行時のみ可能です')
+
+    path_str = request.json.get('path', '').strip()
+    if not path_str:
+        return jsonify({'error': 'パスを入力してください'}), 400
+
+    try:
+        new_path = Path(path_str).resolve()
+
+        # 絶対パスであることを確認
+        if not new_path.is_absolute():
+            return jsonify({'error': '絶対パスで指定してください'}), 400
+
+        # ディレクトリ作成（存在しない場合）
+        new_path.mkdir(parents=True, exist_ok=True)
+
+        set_download_dir(new_path)
+        return jsonify({'path': str(new_path)})
+    except PermissionError:
+        return jsonify({'error': 'アクセス権限がありません'}), 400
+    except Exception as e:
+        return jsonify({'error': f'無効なパスです: {str(e)}'}), 400
 
 
 @app.route('/parse_csv', methods=['POST'])
@@ -504,7 +557,7 @@ def export_failed():
 if __name__ == '__main__':
     print('=' * 50)
     print('画像ダウンロードツール 起動中...')
-    print(f'画像保存先: {DOWNLOAD_DIR}')
+    print(f'画像保存先: {get_download_dir()}')
     if not BASIC_AUTH_PASS:
         print('認証: 無効（ローカルモード）')
     else:

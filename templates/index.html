@@ -87,6 +87,20 @@
       <h6 class="d-flex align-items-center mb-3"><span class="step-num">3</span>抽出結果を確認</h6>
       <div id="url-summary" class="mb-2"></div>
       <div id="url-list" class="border rounded p-2 bg-white mb-3 font-monospace"></div>
+
+      {% if is_local %}
+      <!-- 保存先フォルダ（ローカル実行時のみ表示） -->
+      <div class="mb-3 p-3 bg-light rounded border">
+        <label class="form-label fw-semibold mb-1" style="font-size:0.9rem;">保存先フォルダ</label>
+        <div class="d-flex gap-2 align-items-center">
+          <input type="text" id="download-dir-input" class="form-control form-control-sm font-monospace"
+            value="{{ download_dir }}" style="flex:1;">
+          <button class="btn btn-outline-secondary btn-sm" id="btn-set-dir" style="white-space:nowrap;">変更</button>
+        </div>
+        <div id="dir-status" class="mt-1" style="font-size:0.82rem;"></div>
+      </div>
+      {% endif %}
+
       <button class="btn btn-success" id="btn-start">ダウンロード開始</button>
     </div>
   </div>
@@ -339,6 +353,36 @@
       alert('エラー: ' + e.message);
     }
   });
+
+  // ---- 保存先フォルダの変更（ローカルモード専用） ----
+  const btnSetDir = document.getElementById('btn-set-dir');
+  if (btnSetDir) {
+    btnSetDir.addEventListener('click', async () => {
+      const pathVal = document.getElementById('download-dir-input').value.trim();
+      if (!pathVal) return;
+      const statusEl = document.getElementById('dir-status');
+      statusEl.textContent = '確認中...';
+      statusEl.className = 'mt-1 text-muted';
+      try {
+        const res = await apiFetch('/download_dir', {
+          method: 'POST',
+          body: JSON.stringify({path: pathVal})
+        });
+        const data = await res.json();
+        if (data.error) {
+          statusEl.textContent = '✗ ' + data.error;
+          statusEl.className = 'mt-1 text-danger';
+        } else {
+          document.getElementById('download-dir-input').value = data.path;
+          statusEl.textContent = '✓ 保存先を変更しました: ' + data.path;
+          statusEl.className = 'mt-1 text-success';
+        }
+      } catch (e) {
+        statusEl.textContent = 'エラー: ' + e.message;
+        statusEl.className = 'mt-1 text-danger';
+      }
+    });
+  }
 
   function renderUrlList(urls, blocked) {
     const summary = document.getElementById('url-summary');
