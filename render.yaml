@@ -7,12 +7,12 @@ services:
     plan: free
     envVars:
       - key: BASIC_AUTH_USER
-        sync: false          # Renderダッシュボードで設定
+        sync: false
       - key: BASIC_AUTH_PASS
-        sync: false          # Renderダッシュボードで設定
+        sync: false
       - key: SECRET_KEY
-        generateValue: true  # Renderが自動生成
+        generateValue: true
       - key: CSRF_SECRET
-        generateValue: true  # Renderが自動生成
+        generateValue: true
       - key: DOWNLOAD_DIR
         value: /tmp/downloads
