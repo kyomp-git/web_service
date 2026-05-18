@@ -6,6 +6,7 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>画像ダウンロードツール</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <style>
     body { background: #f8f9fa; }
     .step-card { border-left: 4px solid #dee2e6; margin-bottom: 1.5rem; }
@@ -99,6 +100,18 @@
         </div>
         <div id="dir-status" class="mt-1" style="font-size:0.82rem;"></div>
       </div>
+      {% else %}
+      <!-- 保存先フォルダ選択（Render版：File System Access API） -->
+      <div class="mb-3 p-3 bg-light rounded border" id="dir-picker-wrap">
+        <label class="form-label fw-semibold mb-1" style="font-size:0.9rem;">保存先フォルダ（省略可）</label>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <button class="btn btn-outline-secondary btn-sm" id="btn-pick-dir">フォルダを選択</button>
+          <span id="picked-dir-name" class="font-monospace" style="font-size:0.85rem;"></span>
+        </div>
+        <div id="dir-picker-note" class="mt-1 text-muted" style="font-size:0.78rem;">
+          ※ Chrome / Edge のみ対応。未選択の場合はZIPでダウンロードされます。
+        </div>
+      </div>
       {% endif %}
 
       <button class="btn btn-success" id="btn-start">ダウンロード開始</button>
@@ -138,7 +151,10 @@
 
       <div id="complete-section" style="display:none">
         <div class="alert alert-success mb-2" id="complete-msg"></div>
-        <button class="btn btn-primary btn-sm" id="btn-download-zip" style="display:none">
+        <button class="btn btn-success btn-sm" id="btn-extract-to-dir" style="display:none">
+          選択フォルダへ展開
+        </button>
+        <button class="btn btn-primary btn-sm ms-2" id="btn-download-zip" style="display:none">
           ZIPでダウンロード
         </button>
         <button class="btn btn-outline-danger btn-sm ms-2" id="btn-export-failed" style="display:none">
@@ -522,13 +538,79 @@
     const msg = document.getElementById('complete-msg');
     msg.textContent = `完了: ${event.success} 件成功 / ${event.failed} 件失敗 / 合計 ${event.total} 件`;
 
-    if (event.success > 0) document.getElementById('btn-download-zip').style.removeProperty('display');
+    if (event.success > 0) {
+      document.getElementById('btn-download-zip').style.removeProperty('display');
+      if (selectedDirHandle) {
+        document.getElementById('btn-extract-to-dir').style.removeProperty('display');
+      }
+    }
     const exportBtn = document.getElementById('btn-export-failed');
     if (event.failed > 0) exportBtn.style.removeProperty('display');
 
     document.getElementById('complete-section').style.removeProperty('display');
     markDone('card-step4');
   }
+
+  // ---- フォルダ選択 (File System Access API) ----
+  let selectedDirHandle = null;
+
+  const btnPickDir = document.getElementById('btn-pick-dir');
+  if (btnPickDir) {
+    if (!('showDirectoryPicker' in window)) {
+      btnPickDir.disabled = true;
+      document.getElementById('dir-picker-note').innerHTML =
+        '<span class="text-warning">⚠️ このブラウザは非対応です。Chrome / Edge をご利用ください。</span>';
+    } else {
+      btnPickDir.addEventListener('click', async () => {
+        try {
+          selectedDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+          const nameEl = document.getElementById('picked-dir-name');
+          nameEl.textContent = '✓ ' + selectedDirHandle.name;
+          nameEl.className = 'font-monospace text-success';
+        } catch (e) {
+          if (e.name !== 'AbortError') {
+            document.getElementById('picked-dir-name').textContent = 'エラー: ' + e.message;
+          }
+        }
+      });
+    }
+  }
+
+  // ---- 選択フォルダへ展開 ----
+  document.getElementById('btn-extract-to-dir').addEventListener('click', async () => {
+    if (!selectedDirHandle) return;
+    const btn = document.getElementById('btn-extract-to-dir');
+    btn.disabled = true;
+    btn.textContent = 'ZIP取得中...';
+
+    try {
+      const res = await fetch('/download_zip');
+      if (!res.ok) throw new Error('ZIP取得に失敗しました');
+      const blob = await res.blob();
+
+      btn.textContent = '解凍中...';
+      const zip = await JSZip.loadAsync(blob);
+      const files = Object.entries(zip.files).filter(([, f]) => !f.dir);
+      let count = 0;
+
+      for (const [filename, file] of files) {
+        const data = await file.async('uint8array');
+        const fileHandle = await selectedDirHandle.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(data);
+        await writable.close();
+        count++;
+        btn.textContent = `展開中... ${count} / ${files.length}`;
+      }
+
+      btn.textContent = `✓ ${count} 件を展開完了`;
+      btn.classList.replace('btn-success', 'btn-outline-success');
+    } catch (e) {
+      btn.textContent = '展開失敗';
+      btn.disabled = false;
+      alert('エラー: ' + e.message);
+    }
+  });
 
   document.getElementById('btn-download-zip').addEventListener('click', () => {
     window.location.href = '/download_zip';
